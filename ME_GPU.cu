@@ -22,7 +22,10 @@ http://trace.eas.asu.edu/yuv/index.html
 #define BS  4 // block_size
 #define SR  2 // search_radius
 
-//#define ENABLE_PRINT
+
+#define WB W*(BS-1)/
+
+#define ENABLE_PRINT
 
 //because using c not c++
 #define MAX(x, y) (((x) > (y)) ? (x) : (y))
@@ -127,12 +130,10 @@ __global__ void d_generate_mv_one_frame( PIXEL *currunt_frame, PIXEL *reference_
     {
         currunt_block[threadIdx.y][threadIdx.x] = currunt_frame[(y_block+threadIdx.y)*W + x_block+threadIdx.x];
     }
-
-    
     __syncthreads();
 
 
-    sub_result[iz][iy+block_idy][ix+block_idx] = abs(currunt_block[block_idy][block_idx] - reference_blocks[iz][block_idy+iy][block_idx+ix]);
+    sub_result[iz][threadIdx.y][threadIdx.y] = abs(currunt_block[block_idy][block_idx] - reference_blocks[iz][threadIdx.y][threadIdx.x]);
 
     __syncthreads();
 
@@ -142,7 +143,7 @@ __global__ void d_generate_mv_one_frame( PIXEL *currunt_frame, PIXEL *reference_
             for (int j =0; j < BS; j++)
             {
                 if ((i != 0) && (j != 0))
-                    sub_result[iz][iy][ix] += sub_result[iz][iy+j][ix+i];
+                    sub_result[iz][iy][ix] += sub_result[iz][iy+j*(2*SR+1)][ix+i*(2*SR+1)];
             }
         }
     
@@ -151,16 +152,19 @@ __global__ void d_generate_mv_one_frame( PIXEL *currunt_frame, PIXEL *reference_
 
     if (threadIdx.x == 0 && threadIdx.y ==0 && threadIdx.z == 0) // only one
     {
+        motion_vector[(y_block*W+x_block)*3 + 0 ] = 0;
+        motion_vector[(y_block*W+x_block)*3 + 1 ] = 0;
+        motion_vector[(y_block*W+x_block)*3 + 2 ] = 1;
         for(int z = 0; z< NRF; z++){
-            for (int i = 0; i < 2*SR; i++){
-                for (int j =0; j < 2*SR; j++)
+            for (int i = 0; i <= 2*SR; i++){
+                for (int j =0; j <= 2*SR; j++)
                 {
                     if (lowest_SAD < sub_result[z][j][i])
                     {
                         lowest_SAD = sub_result[z][j][i];
-                        motion_vector[(y_block*W+x_block)*3 + 0 ] = i;
-                        motion_vector[(y_block*W+x_block)*3 + 1 ] = j;
-                        motion_vector[(y_block*W+x_block)*3 + 2 ] = iz;
+                        motion_vector[(y_block*W+x_block)*3 + 0 ] = i - SR;
+                        motion_vector[(y_block*W+x_block)*3 + 1 ] = j - SR;
+                        motion_vector[(y_block*W+x_block)*3 + 2 ] = iz+1;
                     }
                 }
             }
@@ -186,11 +190,11 @@ __global__ void d_generate_mv_one_frame( PIXEL *currunt_frame, PIXEL *reference_
 void d_generate_mv_for_frames (int *h_motion_vector,PIXEL *luma){
 
     PIXEL   *currunt_frame;
-    PIXEL   *reference_frames;
     if ( cudaMalloc( (void **) &currunt_frame, H*W*sizeof(PIXEL)) != cudaSuccess ){
         fprintf(stderr, "Failed to allocate device vector for currunt_frame\n");
         //exit(EXIT_FAILURE);    
     }
+    PIXEL   *reference_frames;
     if ( cudaMalloc( (void **) &reference_frames, H*W*NRF*sizeof(PIXEL)) != cudaSuccess ){
         fprintf(stderr, "Failed to allocate device vector for reference_frames\n");
         //exit(EXIT_FAILURE);    
@@ -263,7 +267,7 @@ void write_yuv(FILE *fid, PIXEL *reconstructed, PIXEL *crb){
 int main()
 {
     // take of available refrence frames
-    //int block_size = BS; //min can be 2
+    int block_size = BS; //min can be 2
     //int search_radius = SR; 
     // CIF format
     int height = H; int width = W;
@@ -311,7 +315,8 @@ int main()
         {
             for (int x = 0; x < W; x+=block_size)
             {
-                printf("frame %d at y = %d and x = %d mv = (%d,%d,%d)\n", f, y, x, motion_vector[(W*H*f + y*W + x)*3+0] , motion_vector[(W*H*f + y*W + x)*3+1], motion_vector[(W*H*f + y*W + x)*3+2]);
+                if ((motion_vector[(W*H*f + y*W + x)*3+0]-h_motion_vector[(W*H*f + y*W + x)*3+0] != 0) || (motion_vector[(W*H*f + y*W + x)*3+1]-h_motion_vector[(W*H*f + y*W + x)*3+1] != 0) || (motion_vector[(W*H*f + y*W + x)*3+2]-motion_vector[(W*H*f + y*W + x)*3+2] != 0))
+                    printf("frame %d at y = %d and x = %d mv = (%d,%d,%d) and h_mv = (%d,%d,%d) \n", f, y, x, motion_vector[(W*H*f + y*W + x)*3+0] , motion_vector[(W*H*f + y*W + x)*3+1], motion_vector[(W*H*f + y*W + x)*3+2], h_motion_vector[(W*H*f + y*W + x)*3+0] , h_motion_vector[(W*H*f + y*W + x)*3+1], h_motion_vector[(W*H*f + y*W + x)*3+2]);
             }
         }
     }
