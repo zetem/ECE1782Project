@@ -22,9 +22,6 @@ http://trace.eas.asu.edu/yuv/index.html
 #define BS  4 // block_size
 #define SR  2 // search_radius
 
-
-#define WB W*(BS-1)/
-
 #define ENABLE_PRINT
 
 //because using c not c++
@@ -110,6 +107,9 @@ __global__ void d_generate_mv_one_frame( PIXEL *currunt_frame, PIXEL *reference_
     __shared__ PIXEL reference_blocks[NRF][BS+2*SR][BS+2*SR]; 
     __shared__ PIXEL currunt_block   [BS][BS]; 
     __shared__ PIXEL sub_result      [NRF][2*SR+1][2*SR+1]; 
+    
+    //int nblock_y = h/BS;
+    int nblock_x = w/BS;
     //cordination of upper left pixel
     int x_block   = blockIdx.x*BS;
     int y_block   = blockIdx.y*BS;
@@ -138,28 +138,30 @@ __global__ void d_generate_mv_one_frame( PIXEL *currunt_frame, PIXEL *reference_
         for (int j = 0; j < BS; j++){
             for (int i =0; i < BS; i++)
             {
-                sub_result[iz][iy][ix] += abs(currunt_block[j][i] - reference_blocks[iz][iy+j][ix+i]);
+                sub_result[iz][iy][ix] += abs(currunt_block[j][i] - reference_blocks[iz][iy+j][ix+i]);        
             }
         }
     }
     __syncthreads();
-    int lowest_SAD = 256 * BS * BS;
-
     if (ix == 0 && iy ==0 && iz == 0) // only one
     {
-        motion_vector[(blockIdx.y*w/BS+blockIdx.x)*3 + 0 ] = 0;
-        motion_vector[(blockIdx.y*w/BS+blockIdx.x)*3 + 1 ] = 0;
-        motion_vector[(blockIdx.y*w/BS+blockIdx.x)*3 + 2 ] = 1;
+        int lowest_SAD = 256 * BS * BS;
+
+        printf("at (%d,%d) this is thread (%d,%d,%d) \n",y_block,x_block,iz,iy,ix);
+     
+        motion_vector[(blockIdx.y*nblock_x+blockIdx.x)*3 + 0 ] = 0;
+        motion_vector[(blockIdx.y*nblock_x+blockIdx.x)*3 + 1 ] = 0;
+        motion_vector[(blockIdx.y*nblock_x+blockIdx.x)*3 + 2 ] = 1;
         for(int z = 0; z< NRF; z++){
-            for (int i = 0; i <= 2*SR; i++){
-                for (int j =0; j <= 2*SR; j++)
+            for (int j = 0; j <= 2*SR; j++){
+                for (int i =0; i <= 2*SR; i++)
                 {
                     if (lowest_SAD > sub_result[z][j][i])
                     {
                         lowest_SAD = sub_result[z][j][i];
-                        motion_vector[(y_block*w/BS+x_block)*3 + 0 ] = i  - SR;
-                        motion_vector[(y_block*w/BS+x_block)*3 + 1 ] = j  - SR;
-                        motion_vector[(y_block*w/BS+x_block)*3 + 2 ] = z  + 1 ;
+                        motion_vector[(blockIdx.y*nblock_x+blockIdx.x)*3 + 0 ] = i  - SR;
+                        motion_vector[(blockIdx.y*nblock_x+blockIdx.x)*3 + 1 ] = j  - SR;
+                        motion_vector[(blockIdx.y*nblock_x+blockIdx.x)*3 + 2 ] = z  + 1 ;
                     }
                 }
             }
@@ -195,12 +197,12 @@ void generate_mv_for_frames_gpu (int *h_motion_vector,PIXEL *luma, int h, int w)
         if (cudaMemcpy(reference_frames, &luma[h*w*(f-NRF)] ,h*w*NRF*sizeof(PIXEL), cudaMemcpyHostToDevice) != cudaSuccess ) {
             fprintf(stderr, "Failed to copy vector for reference_frames\n");
         }               
-        dim3 block(NRF, 2*SR+BS, 2*SR+BS);      
-        dim3 grid( nblock_y, nblock_x) ;
+        dim3 block(2*SR+BS, 2*SR+BS, NRF);      
+        dim3 grid(nblock_x,nblock_y) ;
         d_generate_mv_one_frame<<<grid, block>>>( currunt_frame, reference_frames, d_motion_vector, h, w); 
         cudaDeviceSynchronize() ;
 
-        if (cudaMemcpy(&h_motion_vector[nblock_y*nblock_x*f], d_motion_vector,nblock_y*nblock_x*sizeof(int)*3, cudaMemcpyHostToDevice) != cudaSuccess ) {
+        if (cudaMemcpy(&h_motion_vector[nblock_y*nblock_x*f*3], d_motion_vector,nblock_y*nblock_x*sizeof(int)*3, cudaMemcpyHostToDevice) != cudaSuccess ) {
             fprintf(stderr, "Failed to copy vector for motion_vector \n");
         }      
 
@@ -235,11 +237,18 @@ void reconstruct_frames(PIXEL *reconstructed,PIXEL *luma,int *motion_vector, int
 }
 
 void read_luma(FILE *fid, PIXEL *luma, PIXEL *crb, int height, int width){
+    PIXEL   *temp= (PIXEL*) malloc(H*W*NF*sizeof(PIXEL)); if (temp== NULL) fprintf(stderr, "Bad malloc on temp\n");
     for (int f=0; f<NF; f++) {
-        fread (&luma[width*height*f],1,W*H,  fid);
+        fread (&temp[H*W*f],1,W*H,  fid);
         fread (&crb[W*H/2*f],1,W*H/2,fid);
         //fseek (fid,W*H/2,SEEK_CUR); //seek cb and cr
     }
+    for (int f=0; f<NF; f++) {
+        for ( int idh =0; idh < H; idh++){
+            memcpy(&luma[height*width*f+idh*width] , &temp[H*W*f+idh*W], W*sizeof(PIXEL));
+        }
+    }
+    free(temp);
 }
 
 void write_yuv(FILE *fid, PIXEL *reconstructed, PIXEL *crb, int height, int width){
