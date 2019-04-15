@@ -22,7 +22,7 @@ http://trace.eas.asu.edu/yuv/index.html
 #define BS  4 // block_size
 #define SR  2 // search_radius
 
-//#define ENABLE_PRINT
+#define ENABLE_PRINT
 
 //because using c not c++
 #define MAX(x, y) (((x) > (y)) ? (x) : (y))
@@ -37,7 +37,7 @@ double getTimeStamp()
 } 
 
 /////////////////////////////////////////CPU FUNCTIONS///////////////////////////////////////////////////////////////////
-int generate_mv_for_block(PIXEL *currunt_frame, PIXEL *reference_frames, int yb, int xb, int h, int w, int *motion_vector_y, int *motion_vector_x, int *motion_vector_f, int f)    
+int generate_mv_for_block(PIXEL *currunt_frame, PIXEL *reference_frames, int yb, int xb, int h, int w, int *motion_vector_y, int *motion_vector_x, int *motion_vector_f)    
 {    
     int lowest_SAD = 256 * BS * BS;// variable storing the SAD value
     int block_size = BS;
@@ -47,14 +47,10 @@ int generate_mv_for_block(PIXEL *currunt_frame, PIXEL *reference_frames, int yb,
     
     //Search for the best matching block in the reference frame.
     //The search processes only the block is within the reference frame (not out of boundary).
-    for (int ref_index = 0; ref_index < NRF; ref_index++)
-    {   
-        for (int search_x_radius = MAX(x-SR,0); search_x_radius <= MIN(x+SR,W-BS); search_x_radius++){
-            
-            for (int search_y_radius = MAX(y-SR,0); search_y_radius <= MIN(y+SR,H-BS) ; search_y_radius++){                
-                
+    for (int ref_index = 0; ref_index < NRF; ref_index++){   
+        for (int search_y_radius = MAX(y-SR,0); search_y_radius <= MIN(y+SR,H-BS) ; search_y_radius++){ 
+            for (int search_x_radius = MAX(x-SR,0); search_x_radius <= MIN(x+SR,W-BS); search_x_radius++){
                 //Calculate SAD of this block with the input block.
-                //int SAD =  Calculate_SAD(currunt_frame,y,x,referenceFrame[ref_index],search_y_radius,search_x_radius);
                 int SAD = 0;
                 for(int j =0; j < block_size; j++)
                 {
@@ -64,8 +60,6 @@ int generate_mv_for_block(PIXEL *currunt_frame, PIXEL *reference_frames, int yb,
                     }
                 }
                 //If this block is better in SAD...
-                if (x == 128 && y == 268 && f == 172)
-                    printf("sub rez cpu(%d,%d,%d)= %d\n",ref_index,search_y_radius - y, search_x_radius - x, SAD);
                 if (lowest_SAD > SAD){
                     lowest_SAD = SAD; // Update SAD.
                     (*motion_vector_x) = search_x_radius - x;
@@ -90,42 +84,18 @@ void generate_mv_for_frames_cpu(int *motion_vector,PIXEL *luma, int h, int w){
     {
         memcpy(currunt_frame   ,&luma[h*w*f]      ,h*w    *sizeof(PIXEL));
         memcpy(reference_frames,&luma[h*w*(f-NRF)],h*w*NRF*sizeof(PIXEL));
-        for (int y = 0; y < nblock_y; y++)
-        {
-            for (int x = 0; x < nblock_x; x++)
-            {
-                if (x == 32 && y == 67 && f == 172)
-                {
-                    printf("cpu = [ ");
-                    for (int j = 0; j < BS; j++){
-                        for (int i =0; i < BS; i++)
-                        {
-                            printf("%d ",currunt_frame[(y*BS+j)*w+x*BS+i]);
-                        }
-                        printf("; ");
-                    }
-                    printf("]\n");
-                    printf("cpu ref = [ ");
-                    for (int j = 0; j < BS; j++){
-                        for (int i =0; i < BS; i++)
-                        {
-                            printf("%d ",reference_frames[2*w*h+(y*BS+j)*w +x*BS+i]);
-                        }
-                        printf("; ");
-                    }
-                    printf("]\n");
-                }
+        for (int y = 0; y < nblock_y; y++){
+            for (int x = 0; x < nblock_x; x++){
                 int mvy = 0;
                 int mvx = 0;
                 int mvf = 1;
-                generate_mv_for_block(currunt_frame, reference_frames, y, x, h, w, &mvy, &mvx, &mvf, f);
-                motion_vector[(nblock_y*nblock_x*f + y*nblock_x + x)*3+0] = mvy;
-                motion_vector[(nblock_y*nblock_x*f + y*nblock_x + x)*3+1] = mvx; 
+                generate_mv_for_block(currunt_frame, reference_frames, y, x, h, w, &mvy, &mvx, &mvf);
+                motion_vector[(nblock_y*nblock_x*f + y*nblock_x + x)*3+0] = mvx;
+                motion_vector[(nblock_y*nblock_x*f + y*nblock_x + x)*3+1] = mvy; 
                 motion_vector[(nblock_y*nblock_x*f + y*nblock_x + x)*3+2] = mvf;      
             }
         }
     }
-
     free(currunt_frame );
     free(reference_frames);
 }
@@ -178,30 +148,7 @@ __global__ void d_generate_mv_one_frame( PIXEL *currunt_frame, PIXEL *reference_
     // third only one thread compares all SAD and selects the least one and stores motion vector
     if (ix == 0 && iy ==0 && iz == 0) // only one
     {
-
-        if (x_block == 128 && y_block == 268)
-        {
-            printf("gpu =[");
-            for (int j = 0; j < BS; j++){
-                for (int i =0; i < BS; i++)
-                {
-                    printf("%d ",currunt_block[j][i]);
-                }
-                printf(";");
-            }
-            printf("]\n");
-            printf("GPU ref = [ ");
-            for (int j = 0; j < BS; j++){
-                for (int i =0; i < BS; i++)
-                {
-                    printf("%d ",reference_blocks[0][j][i]);
-                }
-                printf("; ");
-            }
-            printf("]\n");
-        }
-        int lowest_SAD = sub_result[0][SR][SR];
-
+        int lowest_SAD = 256 * BS * BS;
         // intiallizing motion vector
         motion_vector[(blockIdx.y*nblock_x+blockIdx.x)*3 + 0 ] = 0;
         motion_vector[(blockIdx.y*nblock_x+blockIdx.x)*3 + 1 ] = 0;
@@ -210,11 +157,8 @@ __global__ void d_generate_mv_one_frame( PIXEL *currunt_frame, PIXEL *reference_
             for (int j = 0; j <= 2*SR; j++){
                 for (int i =0; i <= 2*SR; i++)
                 {
-                    if (x_block == 128 && y_block == 268)
-                        printf("sub rez(%d,%d,%d)= %d\n",z, j - SR, i - SR, sub_result[z][j][i]);
                     if (lowest_SAD > sub_result[z][j][i])
                     {
-                        //printf("at (%d,%d) this is thread (%d,%d,%d) found that (%d,%d,%d) is less\n",y_block,x_block,iz,iy,ix,z,j,i);
                         // found lower value so update motion vector
                         lowest_SAD = sub_result[z][j][i];
                         motion_vector[(blockIdx.y*nblock_x+blockIdx.x)*3 + 0 ] = i  - SR;
@@ -246,7 +190,7 @@ void generate_mv_for_frames_gpu (int *h_motion_vector,PIXEL *luma, int h, int w)
         fprintf(stderr, "Failed to allocate device vector for d_motion_vector\n");
     }
 
-    for (int f =172; f < 173; f++)
+    for (int f =NRF; f < NF; f++)
     {
         if (cudaMemcpy( currunt_frame, &luma[h*w*f], h*w*sizeof(PIXEL), cudaMemcpyHostToDevice) != cudaSuccess){
             fprintf(stderr, "Failed to copy vector for currunt_frame\n");
@@ -281,8 +225,8 @@ void reconstruct_frames(PIXEL *reconstructed,PIXEL *luma,int *motion_vector, int
         {
             for (int x = 0; x < nblock_x; x++)
             {
-                int mvy = motion_vector[(nblock_y*nblock_x*f + y*nblock_x + x)*3+0];
-                int mvx = motion_vector[(nblock_y*nblock_x*f + y*nblock_x + x)*3+1];
+                int mvx = motion_vector[(nblock_y*nblock_x*f + y*nblock_x + x)*3+0];
+                int mvy = motion_vector[(nblock_y*nblock_x*f + y*nblock_x + x)*3+1];
                 int mvf = motion_vector[(nblock_y*nblock_x*f + y*nblock_x + x)*3+2];
                 for(int j =0; j < BS; j++)
                 {
@@ -343,16 +287,11 @@ int main()
     if ( cudaHostAlloc( (void**)&h_motion_vector ,nblock_x*nblock_y*NF*3*sizeof(int), cudaHostAllocWriteCombined) != cudaSuccess ){
         fprintf(stderr, "Bad malloc on h_motion_vector  \n");
     }
-// variables for test
     PIXEL   *h_reconstructed= (PIXEL *) malloc(height*width  *NF*sizeof(PIXEL)); if (h_reconstructed == NULL) fprintf(stderr, "Bad malloc on h_reconstructed  \n");
-
     PIXEL   *luma           = (PIXEL *) malloc(height*width*number_frames*sizeof(PIXEL)); if (luma          == NULL) fprintf(stderr, "Bad malloc on luma           \n");
     int     *motion_vector  = (int *  ) malloc(nblock_x*nblock_y*NF*3    *sizeof(int));   if (motion_vector == NULL) fprintf(stderr, "Bad malloc on motion_vector  \n");
-// variables for test
     PIXEL   *crb            = (PIXEL *) malloc(H*W/2*number_frames *sizeof(PIXEL)); if (crb           == NULL) fprintf(stderr, "Bad malloc on crb           \n");
     PIXEL   *reconstructed  = (PIXEL *) malloc(H*W*number_frames   *sizeof(PIXEL)); if (reconstructed == NULL) fprintf(stderr, "Bad malloc on reconstructed  \n");
-
-
 
     pad_luma (luma, height, width);
     read_luma(fid_in,luma,crb,height,width);
@@ -368,7 +307,6 @@ int main()
 
     double timeStampC= getTimeStamp() ;
     
-
     printf("total CPU time = %.6f\n", timeStampB - timeStampA);
     printf("total GPU time = %.6f\n", timeStampC - timeStampB);
     #ifdef ENABLE_PRINT
@@ -382,12 +320,12 @@ int main()
                 if ((motion_vector[(nblock_y*nblock_x*f + y*nblock_x + x)*3+0]-h_motion_vector[(nblock_y*nblock_x*f + y*nblock_x + x)*3+0] != 0) || (motion_vector[(nblock_y*nblock_x*f + y*nblock_x + x)*3+1]-h_motion_vector[(nblock_y*nblock_x*f + y*nblock_x + x)*3+1] != 0) || (motion_vector[(nblock_y*nblock_x*f + y*nblock_x + x)*3+2]-h_motion_vector[(nblock_y*nblock_x*f + y*nblock_x + x)*3+2] != 0))
                 //if ((motion_vector[(nblock_y*nblock_x*f + y*nblock_x + x)*3+0] != 0) && (motion_vector[(nblock_y*nblock_x*f + y*nblock_x + x)*3+1] != 0) && (motion_vector[(nblock_y*nblock_x*f + y*nblock_x + x)*3+2] != 1))
                     printf("-->frame %d at y = %d and x = %d mv = (%d,%d,%d) and h_mv = (%d,%d,%d) \n", f, y*BS, x*BS, 
-                            motion_vector[(nblock_y*nblock_x*f + y*nblock_x + x)*3+0] , motion_vector[(nblock_y*nblock_x*f + y*nblock_x + x)*3+1], motion_vector[(nblock_y*nblock_x*f + y*nblock_x + x)*3+2], 
-                            h_motion_vector[(nblock_y*nblock_x*f + y*nblock_x + x)*3+0] , h_motion_vector[(nblock_y*nblock_x*f + y*nblock_x + x)*3+1], h_motion_vector[(nblock_y*nblock_x*f + y*nblock_x + x)*3+2]);
-                else
-                    printf("frame %d at y = %d and x = %d mv = (%d,%d,%d) and h_mv = (%d,%d,%d) \n", f, y*BS, x*BS, 
-                            motion_vector[(nblock_y*nblock_x*f + y*nblock_x + x)*3+0] , motion_vector[(nblock_y*nblock_x*f + y*nblock_x + x)*3+1], motion_vector[(nblock_y*nblock_x*f + y*nblock_x + x)*3+2], 
-                            h_motion_vector[(nblock_y*nblock_x*f + y*nblock_x + x)*3+0] , h_motion_vector[(nblock_y*nblock_x*f + y*nblock_x + x)*3+1], h_motion_vector[(nblock_y*nblock_x*f + y*nblock_x + x)*3+2]);
+                              motion_vector[(nblock_y*nblock_x*f + y*nblock_x + x)*3+2]   , motion_vector[(nblock_y*nblock_x*f + y*nblock_x + x)*3+1],   motion_vector[(nblock_y*nblock_x*f + y*nblock_x + x)*3+0], 
+                            h_motion_vector[(nblock_y*nblock_x*f + y*nblock_x + x)*3+2] , h_motion_vector[(nblock_y*nblock_x*f + y*nblock_x + x)*3+1], h_motion_vector[(nblock_y*nblock_x*f + y*nblock_x + x)*3+0]);
+                //else
+                //    printf("frame %d at y = %d and x = %d mv = (%d,%d,%d) and h_mv = (%d,%d,%d) \n", f, y*BS, x*BS, 
+                //            motion_vector[(nblock_y*nblock_x*f + y*nblock_x + x)*3+2] , motion_vector[(nblock_y*nblock_x*f + y*nblock_x + x)*3+1], motion_vector[(nblock_y*nblock_x*f + y*nblock_x + x)*3+0], 
+                //            h_motion_vector[(nblock_y*nblock_x*f + y*nblock_x + x)*3+2] , h_motion_vector[(nblock_y*nblock_x*f + y*nblock_x + x)*3+1], h_motion_vector[(nblock_y*nblock_x*f + y*nblock_x + x)*3+0]);
             
             }
         }
