@@ -20,9 +20,9 @@ http://trace.eas.asu.edu/yuv/index.html
 #define NF 200 // number of frames
 #define NRF 3 // number of refernce frames
 #define BS  4 // block_size
-#define SR  2 // search_radius
+#define SR  8 // search_radius
 
-#define ENABLE_PRINT
+//#define ENABLE_PRINT
 
 //because using c not c++
 #define MAX(x, y) (((x) > (y)) ? (x) : (y))
@@ -126,11 +126,14 @@ __global__ void d_generate_mv_one_frame( PIXEL *currunt_frame, PIXEL *reference_
     {
         reference_blocks[iz][iy][ix] = reference_frames[h*w*(NRF-1-iz)+idy*w+idx];
     }
+	else
+		reference_blocks[iz][iy][ix] = 127;
     // some threads also read current frame
     if (iz == 0 && ix < BS && iy < BS)
     {
         currunt_block[iy][ix] = currunt_frame[idyc*w + idxc];
     }
+
     __syncthreads();
     // second add all the abs values for each direction of movement(iy, ix) over whole block
     if ((ix < 2*SR+1) && (iy < 2*SR+1))
@@ -309,8 +312,9 @@ int main()
     
     printf("total CPU time = %.6f\n", timeStampB - timeStampA);
     printf("total GPU time = %.6f\n", timeStampC - timeStampB);
-    #ifdef ENABLE_PRINT
-    printf("motion_vector\n");
+	printf("SpeedUP = %.3f\n", (timeStampB - timeStampA)/(timeStampC - timeStampB));        
+	#ifdef ENABLE_PRINT
+    //printf("motion_vector\n");
     for (int f =NRF; f < NF; f++)
     {
         for (int y = 0; y < nblock_y; y++)
