@@ -1,7 +1,3 @@
-/*
-link to YUV 
-http://trace.eas.asu.edu/yuv/index.html
-*/
 #include <math.h>  // for abs
 #include <stdio.h>
 #include <stdint.h> // for uint8_t
@@ -20,7 +16,7 @@ http://trace.eas.asu.edu/yuv/index.html
 #define NF 200 // number of frames
 #define NRF 3 // number of refernce frames
 #define BS  4 // block_size
-#define SR  8 // search_radius
+#define SR  2 // search_radius
 
 //#define ENABLE_PRINT
 
@@ -126,8 +122,8 @@ __global__ void d_generate_mv_one_frame( PIXEL *currunt_frame, PIXEL *reference_
     {
         reference_blocks[iz][iy][ix] = reference_frames[h*w*(NRF-1-iz)+idy*w+idx];
     }
-	else
-		reference_blocks[iz][iy][ix] = 127;
+    else
+        reference_blocks[iz][iy][ix] = 127;
     // some threads also read current frame
     if (iz == 0 && ix < BS && iy < BS)
     {
@@ -195,11 +191,11 @@ void generate_mv_for_frames_gpu (int *h_motion_vector,PIXEL *luma, int h, int w)
 
     for (int f =NRF; f < NF; f++)
     {
-        if (cudaMemcpy( currunt_frame, &luma[h*w*f], h*w*sizeof(PIXEL), cudaMemcpyHostToDevice) != cudaSuccess){
+        if (cudaMemcpy( currunt_frame, &luma[h*w*f], h*w*sizeof(PIXEL), cudaMemcpyDeviceToDevice) != cudaSuccess){
             fprintf(stderr, "Failed to copy vector for currunt_frame\n");
         
         }
-        if (cudaMemcpy(reference_frames, &luma[h*w*(f-NRF)] ,h*w*NRF*sizeof(PIXEL), cudaMemcpyHostToDevice) != cudaSuccess ) {
+        if (cudaMemcpy(reference_frames, &luma[h*w*(f-NRF)] ,h*w*NRF*sizeof(PIXEL), cudaMemcpyDeviceToDevice) != cudaSuccess ) {
             fprintf(stderr, "Failed to copy vector for reference_frames\n");
         }               
         dim3 block(2*SR+BS, 2*SR+BS, NRF);      
@@ -207,7 +203,7 @@ void generate_mv_for_frames_gpu (int *h_motion_vector,PIXEL *luma, int h, int w)
         d_generate_mv_one_frame<<<grid, block>>>( currunt_frame, reference_frames, d_motion_vector, h, w); 
         cudaDeviceSynchronize() ;
 
-        if (cudaMemcpy(&h_motion_vector[nblock_y*nblock_x*f*3], d_motion_vector,nblock_y*nblock_x*sizeof(int)*3, cudaMemcpyHostToDevice) != cudaSuccess ) {
+        if (cudaMemcpy(&h_motion_vector[nblock_y*nblock_x*f*3], d_motion_vector,nblock_y*nblock_x*sizeof(int)*3, cudaMemcpyDeviceToDevice) != cudaSuccess ) {
             fprintf(stderr, "Failed to copy vector for motion_vector \n");
         }      
 
@@ -286,12 +282,14 @@ int main()
     FILE    *fid_in         = fopen("akiyo_cif.yuv","rb");
     FILE    *fid_out      = fopen("akiyo_cif_constructed.yuv","wb");
     FILE    *h_fid_out      = fopen("akiyo_cif_constructed_GPU.yuv","wb");
-    int     *h_motion_vector;
-    if ( cudaHostAlloc( (void**)&h_motion_vector ,nblock_x*nblock_y*NF*3*sizeof(int), cudaHostAllocWriteCombined) != cudaSuccess ){
+    int     *h_motion_vector; //= (int *) malloc(nblock_x*nblock_y*NF*3    *sizeof(int));   if (h_motion_vector == NULL) fprintf(stderr, "Bad malloc on h_motion_vector  \n");
+    if ( cudaHostAlloc( (void**)&h_motion_vector ,nblock_x*nblock_y*NF*3*sizeof(int), cudaHostAllocWriteCombined) != cudaSuccess )
         fprintf(stderr, "Bad malloc on h_motion_vector  \n");
-    }
     PIXEL   *h_reconstructed= (PIXEL *) malloc(height*width  *NF*sizeof(PIXEL)); if (h_reconstructed == NULL) fprintf(stderr, "Bad malloc on h_reconstructed  \n");
-    PIXEL   *luma           = (PIXEL *) malloc(height*width*number_frames*sizeof(PIXEL)); if (luma          == NULL) fprintf(stderr, "Bad malloc on luma           \n");
+    PIXEL   *luma          ;// = (PIXEL *) malloc(height*width*number_frames*sizeof(PIXEL)); if (luma          == NULL) fprintf(stderr, "Bad malloc on luma           \n");
+    if ( cudaHostAlloc( (void**)&luma ,height*width*number_frames*sizeof(PIXEL), cudaHostAllocWriteCombined) != cudaSuccess )
+        fprintf(stderr, "Bad malloc on luma  \n");
+
     int     *motion_vector  = (int *  ) malloc(nblock_x*nblock_y*NF*3    *sizeof(int));   if (motion_vector == NULL) fprintf(stderr, "Bad malloc on motion_vector  \n");
     PIXEL   *crb            = (PIXEL *) malloc(H*W/2*number_frames *sizeof(PIXEL)); if (crb           == NULL) fprintf(stderr, "Bad malloc on crb           \n");
     PIXEL   *reconstructed  = (PIXEL *) malloc(H*W*number_frames   *sizeof(PIXEL)); if (reconstructed == NULL) fprintf(stderr, "Bad malloc on reconstructed  \n");
@@ -309,11 +307,13 @@ int main()
     generate_mv_for_frames_gpu(h_motion_vector,luma, height ,width);
 
     double timeStampC= getTimeStamp() ;
-    
+
+    int totalreads = (NRF*(BS+2*SR)*(BS+2*SR) +BS*BS)*NF*sizeof(PIXEL);   
     printf("total CPU time = %.6f\n", timeStampB - timeStampA);
     printf("total GPU time = %.6f\n", timeStampC - timeStampB);
-	printf("SpeedUP = %.3f\n", (timeStampB - timeStampA)/(timeStampC - timeStampB));        
-	#ifdef ENABLE_PRINT
+    printf("SpeedUP   = %.3f\n", (timeStampB - timeStampA)/(timeStampC - timeStampB));   
+    printf("BandWidth = %.3f\n", totalreads/(timeStampC - timeStampB)/1000);   
+    #ifdef ENABLE_PRINT
     //printf("motion_vector\n");
     for (int f =NRF; f < NF; f++)
     {
@@ -346,7 +346,7 @@ int main()
     //////////////////////////////
 
 
-    free(luma          );
+    cudaFreeHost(luma          );
     free(reconstructed);
     free(h_reconstructed);
     free(motion_vector );
