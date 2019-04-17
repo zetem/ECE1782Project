@@ -95,7 +95,54 @@ void generate_mv_for_frames_cpu(int *motion_vector,PIXEL *luma, int h, int w){
     free(currunt_frame );
     free(reference_frames);
 }
+
 /////////////////////////////GPU FUNCTIONS///////////////////////////////////////////////////////////////
+__global__ void d_generate_mv_one_frame_naive( PIXEL *currunt_frame, PIXEL *reference_frames, int *motion_vector, int h, int w)
+{
+
+    int block_size = BS;
+    int nblock_x = w/BS;
+    int nblock_y = h/BS;
+    // (y,x) the pixel location of the top-left corner of the block.
+    
+    //Search for the best matching block in the reference frame.
+    //The search processes only the block is within the reference frame (not out of boundary).
+    for (int f =NRF; f < NF; f++){
+        for (int yb = 0; yb < nblock_y; yb++){
+            for (int xb = 0; xb < nblock_x; xb++){
+                int lowest_SAD = 256 * BS * BS;// variable storing the SAD value
+                int y = yb*BS;
+                int x = xb*BS;
+                for (int ref_index = 0; ref_index < NRF; ref_index++){   
+                    for (int search_y_radius = MAX(y-SR,0); search_y_radius <= MIN(y+SR,H-BS) ; search_y_radius++){ 
+                        for (int search_x_radius = MAX(x-SR,0); search_x_radius <= MIN(x+SR,W-BS); search_x_radius++){
+                            //Calculate SAD of this block with the input block.
+                            int SAD = 0;
+                            for(int j =0; j < block_size; j++)
+                            {
+                                for (int i=0; i < block_size; i++)
+                                {
+                                    SAD += abs(currunt_frame[(y+j)*w+x+i] - reference_frames[(NRF-1-ref_index)*w*h+(search_y_radius+j)*w +search_x_radius+i]);
+                                }
+                            }
+                            //If this block is better in SAD...
+                            if (lowest_SAD > SAD){
+                                lowest_SAD = SAD; // Update SAD.
+                                motion_vector[(yb*nblock_x+xb)*3+0] = search_x_radius - x;
+                                motion_vector[(yb*nblock_x+xb)*3+1] = search_y_radius - y;
+                                motion_vector[(yb*nblock_x+xb)*3+2] = ref_index + 1;  
+                            }
+                            //If there is a tie in SAD keep last change
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+//////////////////////////////////////
 __global__ void d_generate_mv_one_frame( PIXEL *currunt_frame, PIXEL *reference_frames, int *motion_vector, int h, int w)
 {
     __shared__ PIXEL reference_blocks[NRF][BS+2*SR][BS+2*SR]; 
@@ -201,6 +248,7 @@ void generate_mv_for_frames_gpu (int *h_motion_vector,PIXEL *luma, int h, int w)
         dim3 block(2*SR+BS, 2*SR+BS, NRF);      
         dim3 grid(nblock_x,nblock_y) ;
         d_generate_mv_one_frame<<<grid, block>>>( currunt_frame, reference_frames, d_motion_vector, h, w); 
+        //d_generate_mv_one_frame2<<<1, 1>>>( currunt_frame, reference_frames, d_motion_vector, h, w); 
         cudaDeviceSynchronize() ;
 
         if (cudaMemcpy(&h_motion_vector[nblock_y*nblock_x*f*3], d_motion_vector,nblock_y*nblock_x*sizeof(int)*3, cudaMemcpyDeviceToDevice) != cudaSuccess ) {
